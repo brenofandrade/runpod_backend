@@ -12,6 +12,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from pinecone import Pinecone
+from langchain.globals import set_debug, set_verbose
 from langchain_pinecone import PineconeVectorStore
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
@@ -20,6 +21,8 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 
 # ---- Config base ----
+set_debug(True)
+set_verbose(True)
 load_dotenv(override=True)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s")
@@ -51,6 +54,17 @@ def serialize_sources(docs: List[Document]) -> List[Dict[str, Any]]:
         )
     return out
 
+import re
+
+def extract_final_answer(resposta: str) -> str:
+    """
+    Remove trechos de raciocínio marcados entre <think>...</think>
+    e retorna apenas a resposta final.
+    """
+    # Substitui qualquer conteúdo dentro das tags <think>...</think>
+    resposta_limpa = re.sub(r"<think>.*?</think>", "", resposta, flags=re.DOTALL)
+    return resposta_limpa.strip()
+
 # ---- App ----
 app = Flask(__name__)
 CORS(app)
@@ -65,10 +79,24 @@ embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_BASE_URL)
 # Instanciamos o VectorStore sem travar namespace; passaremos namespace no retriever.
 vectorstore = PineconeVectorStore(index=index, embedding=embeddings)
 
-SYSTEM_PROMPT = (
-    "Você é um assistente RAG. Responda de forma concisa usando APENAS os trechos do contexto. "
-    "Se não souber, diga 'Não sei com base nos documentos'.\n\n"
-    "# Contexto\n{context}\n\n# Pergunta\n{input}"
+SYSTEM_PROMPT = ("""Você é um assistente especializado em Responder Apenas com Base no Contexto.
+
+Regras:
+1) Use exclusivamente o conteúdo em “Contexto”.
+2) Seja conciso (<=120 palavras, exceto código/tabelas).
+3) Se não souber, diga: "Não sei."
+4) Cite fontes no formato [fonte:source|doc_id|p.page] quando disponíveis.
+5) Se houver conflito no contexto, informe o conflito sem extrapolar.
+6) Responda em português. Não revele o raciocínio.
+
+# Contexto:
+{context}
+
+# Pergunta:
+{input}
+
+# Resposta:
+"""                 
 )
 
 # Importante: o prompt precisa ter {context} e {input} (não {question}).
@@ -83,15 +111,13 @@ def health():
         # Verificação leve de conectividade com Pinecone
         _ = index.describe_index_stats()
         # Verificação leve de Ollama (chamada mínima via geração “ping”)
-        _ = llm.invoke("pong?")  # sem contexto, só sanity check
+        # _ = llm.invoke("pong?")  # sem contexto, só sanity check
         return jsonify({"status": "OK"}), 200
     except Exception as e:
         logging.exception("Health check falhou: %s", e)
         return jsonify({"status": "DEGRADED", "error": str(e)}), 503
 
-@app.get("/upvecstore")
-def update_vector_store():
-    pass
+
 
 
 @app.post("/chat")
@@ -120,10 +146,13 @@ def chat():
         result = rag_chain.invoke({"input": question})
 
         answer = result.get("answer", "").strip()
+
+        final_answer = extract_final_answer(answer)
+
         context_docs = result.get("context", [])
 
         response = {
-            "answer": answer,
+            "answer": final_answer,
             "sources": serialize_sources(context_docs),
             "namespace": namespace,
             "k": k,
@@ -134,6 +163,11 @@ def chat():
         logging.exception("Erro no chat: %s", e)
         return jsonify({"error": str(e)}), 500
 
+
+
+@app.get("/upvecstore")
+def update_vector_store():
+    pass
 
 
 # ---- Execução direta (dev) ----
