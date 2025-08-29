@@ -67,7 +67,17 @@ def extract_final_answer(resposta: str) -> str:
 
 # ---- App ----
 app = Flask(__name__)
-CORS(app)
+# CORS amplo e com suporte a preflight
+CORS(
+    app,
+    resources={r"/*": {"origins": "*"}},
+    supports_credentials=True,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "OPTIONS"],
+    max_age=86400,
+)
+# CORS(app)
+
 
 # ---- Recursos externos (Pinecone / Ollama / LangChain) ----
 pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -120,7 +130,8 @@ def health():
 
 
 
-@app.post("/chat")
+@app.route("/chat", methods=["POST", "OPTIONS"])
+@app.route("/chat/", methods=["POST", "OPTIONS"])
 def chat():
     payload = request.get_json(force=True, silent=True) or {}
     question: str = (payload.get("question") or "").strip()
