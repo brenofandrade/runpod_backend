@@ -71,13 +71,13 @@ app = Flask(__name__)
 CORS(
     app,
     resources={r"/*": {"origins": "*"}},
-    supports_credentials=True,
+    supports_credentials=False,
     allow_headers=["Content-Type", "Authorization"],
     methods=["GET", "POST", "OPTIONS"],
     max_age=86400,
 )
 # CORS(app)
-
+app.url_map.strict_slashes = False
 
 # ---- Recursos externos (Pinecone / Ollama / LangChain) ----
 pc = Pinecone(api_key=PINECONE_API_KEY)

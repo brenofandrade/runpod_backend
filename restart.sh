@@ -1,13 +1,5 @@
 #!/bin/bash
 
-python -m venv env
-
-source env/bin/activate
-
-sudo apt-get remove -y python-blinker || true
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-
 echo "==== Configurando o Ollama ===="
 
 curl -fsSL https://ollama.com/install.sh | sh
@@ -24,7 +16,7 @@ ollama pull mxbai-embed-large:latest
 
 sleep 2
 
-
+source env/bin/activate
 
 clear
 
