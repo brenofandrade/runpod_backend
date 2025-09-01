@@ -120,6 +120,7 @@ def health():
     try:
         # Verificação leve de conectividade com Pinecone
         _ = index.describe_index_stats()
+        print("[OK] - Chamada recebida")
         # Verificação leve de Ollama (chamada mínima via geração “ping”)
         # _ = llm.invoke("pong?")  # sem contexto, só sanity check
         return jsonify({"status": "OK"}), 200
