@@ -1,8 +1,19 @@
 #!/bin/bash
 
+echo "==== Incializando ===="
+
+
+echo "==== Criando ambiente virtual ===="
+
 python -m venv env
 
+echo "==== Ativando o ambiente virtual ===="
+
+
 source env/bin/activate
+
+echo "==== Preparando a instalação de pacotes ===="
+
 
 sudo apt-get remove -y python-blinker || true
 python -m pip install --upgrade pip

@@ -11,9 +11,9 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from pinecone import Pinecone
+# from pinecone import Pinecone # Depreacated
 from langchain.globals import set_debug, set_verbose
-from langchain_pinecone import PineconeVectorStore
+from langchain_pinecone.vectorstores import Pinecone, PineconeVectorStore
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
