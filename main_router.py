@@ -15,22 +15,23 @@ from dotenv import load_dotenv
 
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.documents import Document
 from langchain.chains import create_retrieval_chain
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.memory import ConversationBufferMemory
 from langchain.chains.combine_documents import create_stuff_documents_chain
+from pinecone import Pinecone
 from langchain_pinecone.vectorstores import PineconeVectorStore
 from langchain.globals import set_debug, set_verbose
 
-from pinecone import Pinecone
 from pydantic import BaseModel, Field
 
 
 # --- Ambiente e Logging ---
 load_dotenv(override=True)
+# debug para visualizar o fluxo do langchain
 set_debug(True)
 set_verbose(True)
 
@@ -38,12 +39,11 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s")
 filterwarnings("ignore")
 
-
 # --- Variáveis de Ambiente ---
 OLLAMA_BASE_URL     = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 GENERATION_MODEL    = os.getenv("GENERATION_MODEL", "llama3.2:latest")
 EMBEDDING_MODEL     = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large:latest")
-PINECONE_API_KEY    = os.getenv("PINECONE_API_KEY")
+PINECONE_API_KEY    = os.getenv("PINECONE_API_KEY_DSUNIBLU","PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 DEFAULT_NAMESPACE   = os.getenv("PINECONE_NAMESPACE", "default")
 
@@ -60,25 +60,15 @@ Você é um roteador de perguntas para um sistema RAG.
 Responda apenas com JSON com os campos:
 - "use_rag"
 - "confidence"
-- "rationale"
+
 
 Exemplo de resposta válida:
-{{"use_rag": true, "confidence": 0.87, "rationale": "Cita contrato interno"}}
+{{"use_rag": true, "confidence": 0.87}}
 """
-
-
-
-
-# """
-# Você é um roteador de perguntas para um sistema RAG.
-# Decida se a pergunta precisa consultar a base (RAG) ou se pode ser respondida sem RAG.
-# Responda apenas com JSON válido: {"use_rag": true, "confidence": 0.85, "rationale": "motivo"}
-# """
 
 class RouteDecision(BaseModel):
     use_rag: bool = Field(..., description="Se deve usar RAG.")
     confidence: float = Field(..., ge=0, le=1, description="Confiança da decisão.")
-    rationale: str = Field(..., description="Justificativa curta (pt-br)")
 
 router_llm = ChatOllama(model="llama3.2", temperature=0, base_url=OLLAMA_BASE_URL)
 router_parser = JsonOutputParser(pydantic_object=RouteDecision)
@@ -92,6 +82,7 @@ router_prompt = ChatPromptTemplate.from_messages([
 direct_llm = ChatOllama(model=GENERATION_MODEL, base_url=OLLAMA_BASE_URL, temperature=0)
 direct_prompt = ChatPromptTemplate.from_messages([
     ("system", "Você é um assistente técnico. Responda em português. Seja preciso."),
+    MessagesPlaceholder(variable_name="history"),
     ("user", "{question}")
 ])
 direct_chain = direct_prompt | direct_llm
@@ -102,6 +93,10 @@ memory_store = {}
 
 def get_memory(session_id):
     return memory_store.setdefault(session_id, [])
+
+def clear_memory(session_id: str) -> bool:
+    """Remove a memória da sessão. Retorna True se existia, False caso contrário."""
+    return memory_store.pop(session_id, None) is not None
 
 def _strip_fences_and_think(s: str) -> str:
     s = re.sub(r"<think>.*?</think>", "", s, flags=re.DOTALL)
@@ -169,20 +164,52 @@ index = pc.Index(PINECONE_INDEX_NAME)
 embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_BASE_URL)
 vectorstore = PineconeVectorStore(index=index, embedding=embeddings)
 
-prompt_rag = ChatPromptTemplate.from_template("""
-Você é um assistente especializado. Responda apenas com base no contexto.
-{context}
+# prompt_rag = ChatPromptTemplate.from_template("""
+# Você é um assistente especializado em Responder Apenas com Base no Contexto.
 
-Pergunta: {input}
-Resposta:
-""".strip())
+# Regras:
+# 1) Use exclusivamente o conteúdo em “Contexto”.
+# 2) Seja conciso (<=120 palavras, exceto código/tabelas).
+# 3) Se não souber, diga: "Não sei."
+# 4) Cite fontes no formato [fonte:source|doc_id|p.page] quando disponíveis.
+# 5) Se houver conflito no contexto, informe o conflito sem extrapolar.
+# 6) Responda em português. Não revele o raciocínio.
+
+# # Contexto:
+# {context}
+
+# # Pergunta:
+# {input}
+
+# # Resposta:
+# """.strip())
+
+prompt_rag = ChatPromptTemplate.from_messages([
+    ("system",
+     "Você é um assistente especializado em responder **apenas** com base no Contexto."),
+    MessagesPlaceholder(variable_name="history"),
+    ("system",
+     "Regras:\n"
+     "1) Use exclusivamente o conteúdo em “Contexto”.\n"
+     "2) Seja conciso (<=120 palavras, exceto código/tabelas).\n"
+     "3) Se não souber, diga: \"Não sei.\"\n"
+     "4) Cite fontes no formato [fonte:source|doc_id|p.page] quando disponíveis.\n"
+     "5) Se houver conflito no contexto, informe o conflito sem extrapolar.\n"
+     "6) Responda em português. Não revele o raciocínio."),
+    ("system", "# Contexto:\n{context}"),
+    ("user", "# Pergunta:\n{input}\n\n# Resposta:")
+])
 
 combine_chain = create_stuff_documents_chain(direct_llm, prompt_rag)
 
 
 # --- Flask App ---
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
+CORS(
+    app, 
+    resources={r"/*": {"origins": "*"}}, 
+    supports_credentials=False
+)
 app.url_map.strict_slashes = False
 
 
@@ -200,10 +227,9 @@ def health_check():
 @app.route("/chat", methods=["POST", "OPTIONS"])
 def chat():
     payload = request.get_json(force=True, silent=True) or {}
+    
     question = (payload.get("question") or "").strip()
-    
     session_id = request.headers.get("X-Session-Id")
-    
     
     if not session_id:
         return jsonify({"error": "Faltando session_id"}), 400
@@ -221,12 +247,13 @@ def chat():
 
     if force_rag and force_direct:
         return jsonify({"error": "force_rag e force_direct não podem ser usados juntos."}), 400
-
+    
     logging.info(f"Pergunta: {question} | k={k} | ns={namespace} | force_rag={force_rag} | force_direct={force_direct}")
-
+    
     try:
         use_rag = force_rag if (force_rag or force_direct) else llm_route(question).use_rag
 
+        
         if not use_rag:
             direct_response = direct_chain.invoke({"question": question, "history" : memory.chat_memory.messages})
             resposta = _strip_fences_and_think(getattr(direct_response, "content", "Sem resposta."))
@@ -249,10 +276,22 @@ def chat():
             search_kwargs={"k": k, "namespace": namespace}
         )
         rag_chain = create_retrieval_chain(retriever, combine_chain)
-        result = rag_chain.invoke({"input": question})
+        
+        result = rag_chain.invoke({
+            "input": question,
+            "history": memory.chat_memory.messages
+        })
+
+        print("*"*100)
+        print("Resposta: ")
+        print(result)
+        print("")
 
         answer = _strip_fences_and_think(result.get("answer", ""))
         context_docs = result.get("context", [])
+
+
+        print(answer)
 
         if not context_docs:
             logging.info("[RAG] Sem contexto. Fallback para resposta direta.")
@@ -275,6 +314,26 @@ def chat():
         logging.exception("Erro no /chat")
         return jsonify({"error": str(error)}), 500
 
+@app.post("/reset")
+def reset_conversation():
+    """
+    Limpa a memória associada ao X-Session-Id e 'reinicia' a conversa.
+    Aceita o session_id via header X-Session-Id ou no JSON {"session_id": "..."}.
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    session_id = request.headers.get("X-Session-Id") or payload.get("session_id")
+
+    if not session_id:
+        return jsonify({"error": "Faltando session_id"}), 400
+
+    cleared = clear_memory(session_id)
+
+    return jsonify({
+        "ok": True,
+        "cleared": cleared,
+        "session_id": session_id,
+        "message": "Memória apagada. Nova conversa iniciada."
+    }), 200
 
 # --- Execução Local ---
 if __name__ == "__main__":

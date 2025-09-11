@@ -1,6 +1,35 @@
 #!/bin/bash
 
+clear
+
 echo "==== Incializando ===="
+
+apt update
+
+echo "==== repositórios do linux atualizados ====="
+
+apt install -y vim
+
+echo "==== Editor de texto instalado: VIM ====="
+
+echo "Iniciando a configuração e instalação do ambiente de execução Em:"
+
+
+sleep 1
+
+echo "3"
+
+sleep 1
+
+echo "2"
+
+sleep 1
+
+echo "1"
+
+sleep 1
+
+clear
 
 
 echo "==== Criando ambiente virtual ===="
@@ -40,4 +69,4 @@ sleep 2
 clear
 
 echo "==== Iniciando aplicação ===="
-nohup waitress-serve --listen=0.0.0.0:8000 main:app &
+nohup waitress-serve --listen=0.0.0.0:8000 main_router:app &

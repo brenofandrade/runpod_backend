@@ -1,5 +1,11 @@
 #!/bin/bash
 
+clear
+
+echo "==== Incializando ===="
+
+sleep 1
+
 echo "==== Configurando o Ollama ===="
 
 curl -fsSL https://ollama.com/install.sh | sh
@@ -21,4 +27,4 @@ source env/bin/activate
 clear
 
 echo "==== Iniciando aplicação ===="
-nohup waitress-serve --listen=0.0.0.0:8000 main:app &
+nohup waitress-serve --listen=0.0.0.0:8000 main_router:app &
