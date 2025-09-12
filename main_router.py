@@ -190,12 +190,12 @@ prompt_rag = ChatPromptTemplate.from_messages([
     MessagesPlaceholder(variable_name="history"),
     ("system",
      "Regras:\n"
-     "1) Use exclusivamente o conteúdo em “Contexto”.\n"
-     "2) Seja conciso (<=120 palavras, exceto código/tabelas).\n"
-     "3) Se não souber, diga: \"Não sei.\"\n"
-     "4) Cite fontes no formato [fonte:source|doc_id|p.page] quando disponíveis.\n"
-     "5) Se houver conflito no contexto, informe o conflito sem extrapolar.\n"
-     "6) Responda em português. Não revele o raciocínio."),
+     "- Use exclusivamente o conteúdo em “Contexto”.\n"
+     "- Seja conciso (<=120 palavras, exceto código/tabelas).\n"
+     "- Se não souber, diga: \"Não encontrei uma referência interna confiável para responder com segurança.\"\n"
+     "- Cite fontes no formato [fonte:source|doc_id|p.page] quando disponíveis.\n"
+     "- Se houver conflito no contexto, informe o conflito sem extrapolar.\n"
+     "- Responda em português."),
     ("system", "# Contexto:\n{context}"),
     ("user", "# Pergunta:\n{input}\n\n# Resposta:")
 ])
@@ -291,7 +291,8 @@ def chat():
         context_docs = result.get("context", [])
 
 
-        print(answer)
+        if answer == "Não encontrei uma referência interna confiável para responder com segurança.":
+            context_docs = []
 
         if not context_docs:
             logging.info("[RAG] Sem contexto. Fallback para resposta direta.")

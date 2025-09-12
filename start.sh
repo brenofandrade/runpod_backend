@@ -58,13 +58,20 @@ nohup ollama serve &
 
 sleep 2
 
+echo "Llama3.2:"
 ollama pull llama3.2
+
+echo "Deepseek-r1"
 ollama pull deepseek-r1:latest
+
+echo "mxbai-embed-large"
 ollama pull mxbai-embed-large:latest
 
 sleep 2
 
+clear
 
+ollama ls
 
 clear
 
