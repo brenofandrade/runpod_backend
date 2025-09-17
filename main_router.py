@@ -38,7 +38,8 @@ OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 GENERATION_MODEL  = os.getenv("GENERATION_MODEL", "llama3.2:latest")
 EMBEDDING_MODEL   = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large:latest")
 # CORREÇÃO: pegue PINECONE_API_KEY corretamente, sem defaults enganosos
-PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY") or os.getenv("PINECONE_API_KEY_DSUNIBLU")
+# PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY") or os.getenv("PINECONE_API_KEY_DSUNIBLU")
+PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY_DSUNIBLU")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 DEFAULT_NAMESPACE = os.getenv("PINECONE_NAMESPACE", "default")
 # debug para visualizar o fluxo do langchain
