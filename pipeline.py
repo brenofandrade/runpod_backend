@@ -15,7 +15,7 @@ load_dotenv()
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large")
-INDEX_NAME = os.getenv("PINECONE_INDEX", "pdf-vector-store")
+INDEX_NAME = os.getenv("PINECONE_INDEX", "teste")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 EMBED_DIM = int(os.getenv("EMBED_DIM", "1024"))  # mxbai-embed-large = 1024
@@ -81,7 +81,7 @@ class PineconeStore:
         # 1) Carregar e dividir
         loader = PyPDFLoader(file_path)
         pages = loader.load()
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=2500, chunk_overlap=100)
         docs = splitter.split_documents(pages)
 
         if not docs:
@@ -129,7 +129,7 @@ if __name__ == "__main__":
 
     # Upload um arquivo especifico
     store.upsert_pdf(
-        file_path="downloads/Anexo_II_DUT_2021_RN_465.2021_RN628.2025_RN629.2025.pdf",
+        file_path="downloads/DIR-324 - Diretriz de Beneficios - Rev.02.pdf",
         namespace="default",
         delete_before=False
     )

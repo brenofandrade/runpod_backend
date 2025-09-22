@@ -76,4 +76,4 @@ ollama ls
 clear
 
 echo "==== Iniciando aplicação ===="
-nohup waitress-serve --listen=0.0.0.0:8000 main_router:app &
+# nohup waitress-serve --listen=0.0.0.0:8000 main_router:app &
