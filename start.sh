@@ -67,11 +67,16 @@ ollama pull deepseek-r1:latest
 echo "mxbai-embed-large"
 ollama pull mxbai-embed-large:latest
 
+echo "gpt-oss:latest"
+ollama pull gpt-oss:latest
+
 sleep 2
 
 clear
 
 ollama ls
+
+sleep 5
 
 clear
 

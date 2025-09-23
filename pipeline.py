@@ -4,8 +4,14 @@ import hashlib
 import unicodedata
 from typing import List
 from dotenv import load_dotenv
+
+from itertools import product
+
+
 from pinecone import Pinecone, ServerlessSpec
 from pinecone.exceptions import PineconeApiException
+
+
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -19,6 +25,8 @@ INDEX_NAME = os.getenv("PINECONE_INDEX", "teste")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 EMBED_DIM = int(os.getenv("EMBED_DIM", "1024"))  # mxbai-embed-large = 1024
+
+
 
 # ----------------------
 # Helpers
@@ -45,20 +53,56 @@ def chunk_id(doc_id: str, i: int) -> str:
 # ----------------------
 # Store
 # ----------------------
+# class PineconeStore:
+#     def __init__(self, sufixo):
+#         api_key = os.getenv("PINECONE_API_KEY")
+#         if not api_key:
+#             raise ValueError("Variável de ambiente PINECONE_API_KEY não configurada")
+
+#         self.pc = Pinecone(api_key=api_key)
+
+#         # Cria índice se não existir
+#         if INDEX_NAME not in self.pc.list_indexes().names():
+#             print(f"Índice '{INDEX_NAME}_{sufixo}' não existe; criando…")
+#             try:
+#                 INDEX_NAME = INDEX_NAME+str(sufixo)
+#                 self.pc.create_index(
+#                     name=INDEX_NAME,
+#                     dimension=EMBED_DIM,
+#                     metric="cosine",
+#                     spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
+#                 )
+#             except PineconeApiException as e:
+#                 # 409 = already exists (race condition)
+#                 if getattr(e, "status", None) != 409:
+#                     raise
+#         else:
+#             print(f"Índice '{INDEX_NAME}' já existe.")
+
+#         self.index = self.pc.Index(INDEX_NAME)
+#         self.embedder = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_BASE_URL)
+
 class PineconeStore:
-    def __init__(self):
+    def __init__(self, sufixo:str = None):
         api_key = os.getenv("PINECONE_API_KEY")
         if not api_key:
             raise ValueError("Variável de ambiente PINECONE_API_KEY não configurada")
 
         self.pc = Pinecone(api_key=api_key)
+        if sufixo:
+            # Define nome do índice com sufixo
+            self.index_name = f"{INDEX_NAME}-{sufixo}"
+        else:
+            self.index_name = INDEX_NAME
 
+        
         # Cria índice se não existir
-        if INDEX_NAME not in self.pc.list_indexes().names():
-            print(f"Índice '{INDEX_NAME}' não existe; criando…")
+        existing_indexes = self.pc.list_indexes()
+        if self.index_name not in existing_indexes:
+            print(f"Índice '{self.index_name}' não existe; criando…")
             try:
                 self.pc.create_index(
-                    name=INDEX_NAME,
+                    name=self.index_name,
                     dimension=EMBED_DIM,
                     metric="cosine",
                     spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
@@ -68,12 +112,10 @@ class PineconeStore:
                 if getattr(e, "status", None) != 409:
                     raise
         else:
-            print(f"Índice '{INDEX_NAME}' já existe.")
+            print(f"Índice '{self.index_name}' já existe.")
 
-        self.index = self.pc.Index(INDEX_NAME)
+        self.index = self.pc.Index(self.index_name)
         self.embedder = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_BASE_URL)
-
-
     
         
     # -------- Atualização segura (delete + upsert) --------
@@ -81,7 +123,7 @@ class PineconeStore:
         # 1) Carregar e dividir
         loader = PyPDFLoader(file_path)
         pages = loader.load()
-        splitter = RecursiveCharacterTextSplitter(chunk_size=2500, chunk_overlap=100)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP, separators=["\n\n", " \n \n", "***FIM***"])
         docs = splitter.split_documents(pages)
 
         if not docs:
@@ -124,15 +166,32 @@ class PineconeStore:
 
         print(f"[OK] {len(vectors)} chunks upsertados (namespace='{namespace}', doc_id='{doc_id}').")
 
-if __name__ == "__main__":
-    store = PineconeStore()
 
-    # Upload um arquivo especifico
-    store.upsert_pdf(
-        file_path="downloads/DIR-324 - Diretriz de Beneficios - Rev.02.pdf",
-        namespace="default",
-        delete_before=False
-    )
+    def delete_index(self):
+
+        self.index.delete(ids=None, delete_all=True)
+
+if __name__ == "__main__":
+
+
+
+    chunk_size_values = [500, 1000, 1500, 2000, 3000]
+    chunk_overlap_values = [200] # list(range(50, 300, 50))
+
+    for CHUNK_SIZE, CHUNK_OVERLAP in product(chunk_size_values, chunk_overlap_values):
+        sufixo = str(f"{CHUNK_SIZE}-{CHUNK_OVERLAP}")
+        store = PineconeStore(sufixo)
+
+        
+
+        
+
+        # Upload um arquivo especifico
+        store.upsert_pdf(
+            file_path="downloads/DIR-324 - Diretriz de Beneficios - Rev.02.pdf",
+            namespace="default",
+            delete_before=False
+        )
 
 
     # # Upload de todos os arquivos numa pasta
