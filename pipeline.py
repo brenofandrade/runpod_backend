@@ -89,13 +89,15 @@ class PineconeStore:
             raise ValueError("Variável de ambiente PINECONE_API_KEY não configurada")
 
         self.pc = Pinecone(api_key=api_key)
+        
         if sufixo:
             # Define nome do índice com sufixo
             self.index_name = f"{INDEX_NAME}-{sufixo}"
         else:
             self.index_name = INDEX_NAME
 
-        
+        print(f"Index name: {self.index_name}")
+
         # Cria índice se não existir
         existing_indexes = self.pc.list_indexes()
         if self.index_name not in existing_indexes:
@@ -180,6 +182,9 @@ if __name__ == "__main__":
 
     for CHUNK_SIZE, CHUNK_OVERLAP in product(chunk_size_values, chunk_overlap_values):
         sufixo = str(f"{CHUNK_SIZE}-{CHUNK_OVERLAP}")
+
+        print(sufixo)
+
         store = PineconeStore(sufixo)
 
         

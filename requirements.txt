@@ -50,6 +50,7 @@ numpy>=1.26.0
 # Flask backend
 flask>=3.0.3
 flask-cors>=4.0.1
+waitress>=3.0            # servidor WSGI simples e estável p/ prod
 python-dotenv>=1.0.1
 
 # Utilidades
