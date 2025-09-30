@@ -1,6 +1,5 @@
 # --- Imports e Configuração Base ---
 import os
-import time
 import logging
 from warnings import filterwarnings
 from typing import List
@@ -150,20 +149,13 @@ def generate_llm_variants(question: str, n: int = 4) -> List[str]:
         return _fallback_variants(question, n)
 
     prompt = (
-        f"Gere {n} variações curtas e diferentes da pergunta abaixo."
-        "Use sinônimos e termos próximos, mas também expanda a pergunta com contextos prováveis "
-        "(ex.: citar área/unidade responsável, documentos internos, públicos específicos, tipos de colaborador). "
-        "As variações devem ser mais específicas que a pergunta original, sempre mantendo a intenção central. "
-        "Inclua palavras como 'como', 'procedimento', 'área/unidade', 'ação/processo', 'quem', 'onde solicitar', 'quais critérios'. "
-        "Se aplicável, substitua termos genéricos por sinônimos de glossário (ex.: treinamento = capacitação, curso, T&D). "
-        "Se o termo for abreviação, substitua pelo nome por extenso."
+        f"Gere {n} variações curtas e diferentes da pergunta abaixo, cobrindo sinônimos e termos próximos. "
         "Uma por linha, sem numeração.\n\n"
         f"Pergunta: {question}"
     )
-
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             temperature=0.5,
             messages=[
                 {"role": "system", "content": "Você ajuda a reescrever perguntas de modo útil para busca."},
@@ -178,7 +170,7 @@ def generate_llm_variants(question: str, n: int = 4) -> List[str]:
             variants.insert(0, question.strip())
         # Dedup preservando ordem
         # variants = list(OrderedDict.fromkeys(variants))
-        return variants[:n]
+        return variants[:]
     except Exception as e:
         logger.warning("Erro ao gerar variações com OpenAI: %s", e)
         return _fallback_variants(question, n)
@@ -228,7 +220,6 @@ def health():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    start_time = time.perf_counter()
     try:
         payload = request.get_json(force=True, silent=False) or {}
         question = (payload.get("question") or "").strip()
@@ -245,7 +236,9 @@ def chat():
         # 2) Recupera contexto (união deduplicada)
         context_docs: List[Document] = retrieve_union(multi_query, k=k, namespace=namespace)
         context_text = format_docs(context_docs)
-        
+        print(question)
+        print(multi_query)
+        print(context_text)
         # 3) Gera resposta
         ai_msg: AIMessage = (prompt_rag | llm).invoke({
             "input": question,
@@ -254,13 +247,10 @@ def chat():
         })
         # Importante: jsonify não serializa AIMessage; retornamos o .content
         answer_text = getattr(ai_msg, "content", "") if ai_msg else ""
-        
-        latency = (time.perf_counter() - start_time)*1000 # latencia em ms
-        logger.info(f"Latência /chat = {latency:.2f} ms")
+        print(answer_text)
 
         return jsonify({
             "answer": answer_text,
-            "latency_ms":latency,
             "context": context_text,
             "retrieval": {
                 "k": k,
