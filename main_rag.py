@@ -350,7 +350,8 @@ def chat():
         # 2) Recupera contexto (união deduplicada)
         context_docs: List[Document] = retrieve_union(multi_query, k=k, namespace=namespace)
         context_text = format_docs(context_docs)
-
+        print(f"Context Docs: {context_docs}")
+        print(f"Context Text: {context_text}")
         # 3) Gera resposta
         ai_msg: AIMessage = (prompt_rag | llm).invoke({
             "input": generate_question,
