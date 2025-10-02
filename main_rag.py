@@ -26,8 +26,8 @@ from langchain.globals import set_debug, set_verbose
 # --- Ambiente e Logging ---
 load_dotenv(override=True)
 filterwarnings("ignore")
-set_debug(True)
-set_verbose(True)
+# set_debug(True)
+# set_verbose(True)
 
 # --- Variáveis de Ambiente ---
 LOG_LEVEL            = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -350,8 +350,7 @@ def chat():
         # 2) Recupera contexto (união deduplicada)
         context_docs: List[Document] = retrieve_union(multi_query, k=k, namespace=namespace)
         context_text = format_docs(context_docs)
-        print(f"Context Docs: {context_docs}")
-        print(f"Context Text: {context_text}")
+
         # 3) Gera resposta
         ai_msg: AIMessage = (prompt_rag | llm).invoke({
             "input": generate_question,
@@ -374,7 +373,7 @@ def chat():
             "question_used": generate_question,
             "answer": answer,
             "latency_ms": latency,
-            "sources": context_text,
+            "sources": serialize_sources(context_docs),
             "retrieval": {
                 "k": k,
                 "namespace": namespace,
