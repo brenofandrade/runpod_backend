@@ -55,3 +55,7 @@ python-dotenv>=1.0.1
 
 # Utilidades
 requests>=2.32.3
+
+
+# Redis
+redis==6.4.0
