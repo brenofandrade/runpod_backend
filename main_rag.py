@@ -4,12 +4,13 @@ import os
 import re
 import json
 import time
-import redis
+
 import random
 import logging
 from warnings import filterwarnings
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from collections import OrderedDict
+from threading import RLock
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -21,12 +22,11 @@ from langchain.memory import ConversationBufferMemory
 from pinecone import Pinecone
 from langchain_pinecone.vectorstores import PineconeVectorStore
 from langchain.globals import set_debug, set_verbose
-# from pydantic import BaseModel, Field
 
 # --- Ambiente e Logging ---
 load_dotenv(override=True)
 filterwarnings("ignore")
-set_debug(True) 
+set_debug(True)
 set_verbose(True)
 
 # --- Variáveis de Ambiente ---
@@ -34,8 +34,6 @@ LOG_LEVEL            = os.getenv("LOG_LEVEL", "INFO").upper()
 OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 GENERATION_MODEL     = os.getenv("GENERATION_MODEL", "llama3.2:latest")
 EMBEDDING_MODEL      = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large:latest")
-# PINECONE_API_KEY     = os.getenv("PINECONE_API_KEY") or os.getenv("PINECONE_API_KEY_DSUNIBLU")
-# PINECONE_API_KEY     = os.getenv("PINECONE_API_KEY") or os.getenv("PINECONE_API_KEY_DSUNIBLU")
 PINECONE_API_KEY     = os.getenv("PINECONE_API_KEY_DSUNIBLU")
 PINECONE_INDEX_NAME  = os.getenv("PINECONE_INDEX") or os.getenv("PINECONE_INDEX_NAME")
 DEFAULT_NAMESPACE    = os.getenv("PINECONE_NAMESPACE", "default")
@@ -43,8 +41,6 @@ RETRIEVAL_K          = int(os.getenv("RETRIEVAL_K", "2"))
 OPENAI_KEY           = os.getenv("OPENAI_API_KEY")
 MAX_HISTORY          = int(os.getenv("MAX_HISTORY", "10"))
 TTL_SETUP            = int(os.getenv("TTL_SETUP", "1200"))
-REDIS_HOST           = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT           = int(os.getenv("REDIS_PORT", "6379"))
 
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -55,8 +51,6 @@ if not PINECONE_API_KEY:
 if not PINECONE_INDEX_NAME:
     raise RuntimeError("PINECONE_INDEX (ou PINECONE_INDEX_NAME) não configurada.")
 
-# Redis
-r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 # --- OpenAI (opcional para gerar variações de consulta) ---
 client = None
@@ -81,8 +75,64 @@ embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL, base_url=OLLAMA_BASE_URL)
 # Cria a conexão com o Vectorstore
 vectorstore = PineconeVectorStore(index=index, embedding=embeddings)
 
-# módulo de memória
-memory_store: Dict[str, List] = {}
+# =========================
+# MÓDULO DE MEMÓRIA EM RAM
+# =========================
+# Estrutura:
+# memory_store = {
+#   session_id: { "messages": [..], "expires_at": epoch_float }
+# }
+memory_store: Dict[str, Dict[str, Any]] = {}
+_memory_lock = RLock()
+
+def _now() -> float:
+    return time.time()
+
+def _is_expired(entry: Dict[str, Any]) -> bool:
+    return bool(entry) and entry.get("expires_at", 0) <= _now()
+
+def _ensure_entry(session_id: str, ttl: int = TTL_SETUP) -> Dict[str, Any]:
+    with _memory_lock:
+        entry = memory_store.get(session_id)
+        if not entry or _is_expired(entry):
+            memory_store[session_id] = {"messages": [], "expires_at": _now() + ttl}
+        return memory_store[session_id]
+
+def get_memory(session_id: str) -> List[Any]:
+    """Retorna a lista de mensagens da sessão (cria se não existir/expirada)."""
+    entry = _ensure_entry(session_id)
+    return entry["messages"]
+
+def clear_memory(session_id: str) -> bool:
+    """Remove a sessão da memória RAM."""
+    with _memory_lock:
+        return memory_store.pop(session_id, None) is not None
+
+def save_memory(session_id: str, messages: List[Any], ttl: int = TTL_SETUP) -> None:
+    """Salva mensagens e renova o TTL."""
+    with _memory_lock:
+        memory_store[session_id] = {
+            "messages": list(messages),
+            "expires_at": _now() + ttl,
+        }
+
+def load_memory(session_id: str) -> List[Any]:
+    """Carrega mensagens respeitando TTL; se expirado, limpa e retorna lista vazia."""
+    with _memory_lock:
+        entry = memory_store.get(session_id)
+        if not entry:
+            return []
+        if _is_expired(entry):
+            memory_store.pop(session_id, None)
+            return []
+        return list(entry.get("messages", []))
+
+def update_memory(session_id: str, messages: List[Any]) -> List[Any]:
+    """Trunca pelo MAX_HISTORY, salva e retorna o recorte."""
+    truncated = list(messages[-MAX_HISTORY:])
+    save_memory(session_id, truncated, ttl=TTL_SETUP)
+    return truncated
+# =========================
 
 # --- Prompt RAG ---
 prompt_rag = ChatPromptTemplate.from_messages(
@@ -130,7 +180,6 @@ prompt_rag = ChatPromptTemplate.from_messages(
     ]
 )
 
-
 # Helpers
 def _strip_fences_and_think(s: str) -> str:
     s = re.sub(r"<think>.*?</think>", "", s, flags=re.DOTALL)
@@ -147,85 +196,26 @@ def _looks_like_json_schema(d: dict) -> bool:
         set(d.keys()) <= {"type", "properties", "required", "title", "$schema"}
     )
 
-# ==================================================================
-# Módulo de memória 
-def get_memory(session_id):
-    return memory_store.setdefault(session_id, [])
-
-def clear_memory(session_id: str) -> bool:
-    # return memory_store.pop(session_id, None) is not None
-    return r.delete(f"session:{session_id}") > 0
-
-# Módulo de memória usando Redis
-def save_memory(session_id, messages, ttl=TTL_SETUP):
-    r.setex(f"session:{session_id}", ttl, json.dumps(messages))
-
-def load_memory(session_id):
-    data = r.get(f"session:{session_id}")
-    return json.loads(data) if data else []
-
-def update_memory(session_id, messages):
-    # truncated = messages[-MAX_HISTORY:]
-    # memory_store[session_id] = truncated
-    return messages[-MAX_HISTORY:]
-
-# ==================================================================
-
-def serialize_sources(docs: List[Document]) -> List[Dict[str, Any]]:
-    return [
-        {
-            "rank": i + 1,
-            "text": (doc.page_content or "")[:],
-            "metadata": doc.metadata or {},
-        }
-        for i, doc in enumerate(docs or [])
-    ]
-
-def format_docs(docs: List[Document]) -> str:
-    return "\n\n".join((d.page_content or "") for d in docs)
-
-def extract_gen_usage(ai_msg: AIMessage) -> (Dict[str, Any], Dict[str, Any]):
-    """
-    Extrai de forma robusta metadados de geração e uso.
-    Funciona com LangChain 0.2/0.3+ e provedores via Ollama.
-    """
+def extract_gen_usage(ai_msg: AIMessage) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     gen = {}
     usage = {}
-
-    # Preferência: atributos dedicados
     if hasattr(ai_msg, "response_metadata") and ai_msg.response_metadata:
         gen = {**gen, **(ai_msg.response_metadata or {})}
     if hasattr(ai_msg, "generation_info") and getattr(ai_msg, "generation_info"):
         gen = {**gen, **(ai_msg.generation_info or {})}
     if hasattr(ai_msg, "usage_metadata") and ai_msg.usage_metadata:
         usage = {**usage, **(ai_msg.usage_metadata or {})}
-
-    # Fallback: additional_kwargs
     add = getattr(ai_msg, "additional_kwargs", {}) or {}
     if not gen:
         gen = add.get("response_metadata") or add.get("generation_info") or {}
     if not usage:
         usage = add.get("usage_metadata") or add.get("token_usage") or add.get("usage") or {}
-
     return gen, usage
 
-
 def _fallback_variants(question: str, n: int) -> List[str]:
-    """
-    Fallback simples para gerar variações quando OpenAI não está disponível.
-    """
     q = question.strip()
     base = [q]
-    # Heurísticas básicas de reescrita
-    extras = [
-        q.lower(),
-        q.upper(),
-        # q.replace("qual ", "quais são ").replace(" o ", " "),
-        # q.replace("como ", "qual é o procedimento para "),
-        # q.replace("procedimento", "passo a passo"),
-        # q.replace("valor", "custo"),
-    ]
-    # Dedup e limita a n
+    extras = [q.lower(), q.upper()]
     out = []
     for s in base + extras:
         s = s.strip()
@@ -236,10 +226,6 @@ def _fallback_variants(question: str, n: int) -> List[str]:
     return out
 
 def generate_llm_variants(question: str, n: int = 4) -> List[str]:
-    """
-    Gera variações curtas da pergunta. Retorna lista de strings.
-    Usa OpenAI se disponível; caso contrário, aplica um fallback local.
-    """
     if not question or not question.strip():
         return []
     if client is None:
@@ -267,25 +253,15 @@ def generate_llm_variants(question: str, n: int = 4) -> List[str]:
             ],
         )
         content = response.choices[0].message.content or ""
-        # Normaliza em lista e remove vazios/duplicados
         variants = [line.strip("•- \t") for line in content.splitlines() if line.strip()]
-        # Garante que a pergunta original esteja presente
         if question.strip() not in variants:
             variants.insert(0, question.strip())
-        
-        # Dedup preservando ordem
-        # variants = list(OrderedDict.fromkeys(variants))
         return variants[:n]
     except Exception as e:
         logger.warning("Erro ao gerar variações com OpenAI: %s", e)
         return _fallback_variants(question, n)
 
-
-
 def retrieve_union(queries: List[str], k: int, namespace: str) -> List[Document]:
-    """
-    Executa recuperação para cada variação e faz a união deduplicada dos documentos.
-    """
     retriever = vectorstore.as_retriever(
         search_type="similarity",
         search_kwargs={"k": k, "namespace": namespace},
@@ -294,17 +270,39 @@ def retrieve_union(queries: List[str], k: int, namespace: str) -> List[Document]
     seen = set()
     for q in queries:
         try:
-            docs = retriever.get_relevant_documents(q)  # usa API explícita para string única
+            docs = retriever.get_relevant_documents(q)
         except Exception as e:
             logger.error("Erro no retriever para '%s': %s", q, e)
             continue
         for d in docs or []:
-            # Chave de deduplicação simples pelo conteúdo; ajuste se quiser usar metadados/IDs
             key = hash((d.page_content or "").strip())
             if key not in seen:
                 seen.add(key)
                 collected.append(d)
     return collected
+
+def serialize_sources(docs: List[Document], max_chars: int = 900) -> List[Dict[str, Any]]:
+    out = []
+    for i, doc in enumerate(docs or []):
+        meta = doc.metadata or {}
+        ident = (
+            meta.get("source") or meta.get("file_path") or meta.get("filename") or
+            meta.get("document_id") or meta.get("doc_id") or ""
+        )
+        page = meta.get("page") or meta.get("page_number") or meta.get("loc", {}).get("page") or None
+        text = (doc.page_content or "").strip()
+        out.append({
+            "rank": i + 1,
+            "id": ident,
+            "page": page,
+            "text_preview": text[:max_chars],
+            "text_len": len(text),
+            "metadata": meta
+        })
+    return out
+
+def format_docs(docs: List[Document]) -> str:
+    return "\n\n".join((d.page_content or "") for d in docs)
 
 # --- Flask App ---
 app = Flask(__name__)
@@ -327,82 +325,64 @@ def health():
 def chat():
     print("Starting...")
     start_time = time.perf_counter()
-
-    print("start time at:", start_time)
     try:
         payload = request.get_json(force=True, silent=False) or {}
-        print("payload:", payload)
         question = (payload.get("question") or "").strip()
-        print("Questão:", question)
-
         session_id = request.headers.get("X-Session-Id", "")
-        
-        if not session_id:
-            return jsonify({"error":"Faltando session id"}), 400
 
+        if not session_id:
+            return jsonify({"error": "Faltando session id"}), 400
         if not question:
             return jsonify({"error": "Campo 'question' é obrigatório."}), 400
-        
-        # memória
+
+        # memória (RAM)
         memory = ConversationBufferMemory(memory_key="history", return_messages=True)
-        # memory.chat_memory.messages = get_memory(session_id) # RAM
-        memory.chat_memory.messages = load_memory(session_id) # Redis
+        memory.chat_memory.messages = load_memory(session_id)
 
         # Parâmetros opcionais
         k = int(payload.get("k") or RETRIEVAL_K)
         namespace = (payload.get("namespace") or DEFAULT_NAMESPACE or "default").strip()
 
-        # logging.info(f"Pergunta: {question} | k={k} | ns={namespace} | sid={session_id}")
-
         # 1) Gera variações de consulta
         multi_query = generate_llm_variants(question, n=5)
+        generate_question = random.choice(multi_query[1:]) if len(multi_query) > 1 else multi_query[0]
 
-        generate_question = random.choice(multi_query[1:])
-        
         # 2) Recupera contexto (união deduplicada)
         context_docs: List[Document] = retrieve_union(multi_query, k=k, namespace=namespace)
         context_text = format_docs(context_docs)
-        
+
         # 3) Gera resposta
         ai_msg: AIMessage = (prompt_rag | llm).invoke({
-            "input"  : generate_question,
-            "history": memory.chat_memory.messages,  # [],          # ajuste aqui se você passar histórico real
+            "input": generate_question,
+            "history": memory.chat_memory.messages,
             "context": context_text
         })
 
         answer = _strip_fences_and_think(ai_msg.content)
         gen_info, usage_info = extract_gen_usage(ai_msg)
 
-        # Memória
+        # Atualiza memória (RAM)
         memory.chat_memory.add_user_message(question)
         memory.chat_memory.add_ai_message(answer)
-        # memory_store[session_id] = memory.chat_memory.messages
-        
-        # salva no Redis com TTL e limite de histórico
         update_memory(session_id, memory.chat_memory.messages)
-        save_memory(session_id, memory_store[session_id])
 
-        # # Importante: jsonify não serializa AIMessage; retornamos o .content
-        # answer_text = getattr(ai_msg, "content", "") if ai_msg else ""
-        
-        latency = (time.perf_counter() - start_time)*1000 # latencia em ms
+        latency = (time.perf_counter() - start_time) * 1000
         logger.info(f"Latência /chat = {latency:.2f} ms")
-        print("FINISHED")
         return jsonify({
             "question_original": question,
-            "question_used":generate_question,
+            "question_used": generate_question,
             "answer": answer,
-            "latency_ms":latency,
-            "context": context_text,
+            "latency_ms": latency,
+            "sources": context_text,
             "retrieval": {
                 "k": k,
                 "namespace": namespace,
                 "variants": multi_query,
                 "docs": len(context_docs),
             },
-            "metadata":{
-                "generation_info":gen_info,
-                "usage_info":usage_info
+            "metadata": {
+                "generation_info": gen_info,
+                "usage_info": usage_info
             }
         }), 200
 
@@ -430,8 +410,5 @@ def clear():
         logger.exception("Erro no endpoint /clear")
         return jsonify({"error": "Erro interno ao limpar memória.", "detail": str(e)}), 500
 
-
-
 if __name__ == "__main__":
-    # Executar com: FLASK_ENV=development python main.py
     app.run(host="0.0.0.0", port=int(os.getenv("BACKEND_PORT", "8000")), debug=os.getenv("FLASK_DEBUG", "0") == "1")
