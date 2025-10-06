@@ -231,12 +231,15 @@ def generate_llm_variants(question: str, n: int = 4) -> List[str]:
     if client is None:
         return _fallback_variants(question, n)
 
+    pool_prompt = (
+        "Inclua palavras como 'como', 'procedimento', 'área/unidade', 'ação/processo', 'quem', 'onde solicitar', 'quais critérios'. "
+        "(ex.: citar área/unidade responsável, documentos internos, públicos específicos, tipos de colaborador). "
+    )
+
     prompt = (
         f"Gere {n} variações curtas e diferentes da pergunta abaixo."
         "Use sinônimos e termos próximos, mas também expanda a pergunta com contextos prováveis "
-        "(ex.: citar área/unidade responsável, documentos internos, públicos específicos, tipos de colaborador). "
         "As variações devem ser mais específicas que a pergunta original, sempre mantendo a intenção central. "
-        "Inclua palavras como 'como', 'procedimento', 'área/unidade', 'ação/processo', 'quem', 'onde solicitar', 'quais critérios'. "
         "Se aplicável, substitua termos genéricos por sinônimos de glossário (ex.: treinamento = capacitação, curso, T&D). "
         "Se o termo for abreviação, substitua pelo nome por extenso."
         "Uma por linha, sem numeração.\n\n"
@@ -248,7 +251,7 @@ def generate_llm_variants(question: str, n: int = 4) -> List[str]:
             model="gpt-4o-mini",
             temperature=0.7,
             messages=[
-                {"role": "system", "content": "Você ajuda a reescrever perguntas de modo útil para busca."},
+                {"role": "system", "content": "Você ajuda a reescrever perguntas de modo útil que facilita a compreensão."},
                 {"role": "user", "content": prompt}
             ],
         )
