@@ -396,11 +396,15 @@ def chat():
 @app.route("/clear", methods=["POST"])
 def clear():
     try:
-        payload = request.get_json(force=True, silent=False) or {}
-        session_id = payload.get("session_id")
+        
+        session_id = request.headers.get("X-Session-Id")
 
         if not session_id:
-            return jsonify({"error": "Campo 'session_id' é obrigatório."}), 400
+            payload = request.get_json(silent=True) or {}
+            session_id = payload.get("session_id")
+        if not session_id:
+            return jsonify({"error": "Informe o session_id no header X-Session-Id ou no corpo JSON."}), 400
+            
 
         removed = clear_memory(session_id)
 
