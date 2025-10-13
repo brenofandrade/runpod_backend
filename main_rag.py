@@ -263,7 +263,7 @@ def generate_llm_variants(question: str, n: int = 4) -> List[str]:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            temperature=0.7,
+            temperature=0.4,
             messages=[
                 {"role": "system", "content": "Você ajuda a reescrever perguntas de modo útil para busca."},
                 {"role": "user", "content": prompt}
