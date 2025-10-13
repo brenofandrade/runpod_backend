@@ -134,7 +134,7 @@ def update_memory(session_id: str, messages: List[Any]) -> List[Any]:
     return truncated
 # =========================
 
-# --- Prompt RAG ---
+# --- Prompts ---
 prompt_rag = ChatPromptTemplate.from_messages(
     [
         (
@@ -179,6 +179,20 @@ prompt_rag = ChatPromptTemplate.from_messages(
         ("user", "# Pergunta:\n{input}\n\n# Resposta:")
     ]
 )
+
+prompt_general = ChatPromptTemplate.from_messages(
+    [
+        ("system",
+         "Você é um assistente útil e responsável. "
+         "Responda de forma geral e educativa, sem inventar fatos sobre a empresa. "
+         "Nunca forneça (nem peça) dados pessoais, credenciais, segredos ou informações confidenciais. "
+         "Não dê aconselhamento jurídico/financeiro específico. Se algo for especulativo, diga que não sabe."
+        ),
+        MessagesPlaceholder(variable_name="history"),
+        ("user", "{input}")
+    ]
+)
+
 
 # Helpers
 def _strip_fences_and_think(s: str) -> str:
@@ -307,6 +321,21 @@ def serialize_sources(docs: List[Document], max_chars: int = 900) -> List[Dict[s
 def format_docs(docs: List[Document]) -> str:
     return "\n\n".join((d.page_content or "") for d in docs)
 
+def _to_bool(val, default=False) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in {"1","true","t","yes","y","on"}:
+            return True
+        if s in {"0","false","f","no","n","off"}:
+            return False
+    return default
+
 # --- Flask App ---
 app = Flask(__name__)
 CORS(
@@ -332,6 +361,11 @@ def chat():
         payload = request.get_json(force=True, silent=False) or {}
         question = (payload.get("question") or "").strip()
         session_id = request.headers.get("X-Session-Id", "")
+        
+        raw_use_rag = payload.get("use_rag", payload.get("force_rag", True))
+        use_rag = _to_bool(raw_use_rag, default=True)
+
+
 
         if not session_id:
             return jsonify({"error": "Faltando session id"}), 400
@@ -341,6 +375,31 @@ def chat():
         # memória (RAM)
         memory = ConversationBufferMemory(memory_key="history", return_messages=True)
         memory.chat_memory.messages = load_memory(session_id)
+
+        if not use_rag:
+
+            ai_msg:AIMessage=(prompt_general|llm).invoke({
+                "input":question,
+                "history":memory.chat_memory.messages
+            })
+            answer = _strip_fences_and_think(ai_msg.content)
+
+            memory.chat_memory.add_user_message(question)
+            memory.chat_memory.add_ai_message(answer)
+            update_memory(session_id, memory.chat_memory.messages)
+            
+            latency = (time.perf_counter() - start_time)*1000
+
+            logger.info(f"Latência /chat (no-RAG) = {latency:.2f} ms")
+
+            
+            return jsonify({
+                "question_original": question,
+                "answer": answer,
+                "latency_ms": latency,
+                "mode": "no_rag",
+                "sources":None
+            }), 200
 
         # Parâmetros opcionais
         k = int(payload.get("k") or RETRIEVAL_K)
@@ -376,6 +435,7 @@ def chat():
             "question_used": generate_question,
             "answer": answer,
             "latency_ms": latency,
+            "mode": "rag",
             "sources": serialize_sources(context_docs),
             "retrieval": {
                 "k": k,
