@@ -49,8 +49,8 @@ load_dotenv(override=True)
 filterwarnings("ignore")
 
 # Para debugar o código em execução
-# set_debug(True)
-# set_verbose(True)
+set_debug(True)
+set_verbose(True)
 
 # --- Variáveis de Ambiente ---
 LOG_LEVEL            = os.getenv("LOG_LEVEL", "INFO").upper()
