@@ -90,3 +90,95 @@ curl -s -X POST http://localhost:8080/chat \
 - O `POST /chat` retorna `answer`, `sources` (trechos + metadados) e `meta`.
 - Para PDFs, crie um pipeline separado de ingestão (loader + splitter) e alimente o `vectorstore.add_documents` com `Document`s.
 - Caso use Docker, exponha a porta 11434 do Ollama e certifique-se de que a rede permite o acesso do contêiner ao host.
+
+
+--- 
+
+# Manual de Utilização do assistente de conversação para documentos internos
+
+## Visão geral
+
+
+
+
+## Para que serve este assistente?
+
+
+
+## Público-alvo
+
+[X] Colaboradores
+[ ] RH
+[ ] Atendimento ao cliente
+[ ] Outras áreas: ________________
+
+---
+
+## Como funciona?
+
+### Conceitos-chave
+
+
+
+
+
+---
+
+
+## FAQ - Perguntas Frequentes
+
+
+1. O que posso perguntar ao assistente?
+Você pode fazer perguntas sobre políticas internas, benefícios, processos operacionais, normas e procedimentos da empresa.
+
+2. O assistente responde todas as questões?
+Não. Ele responde apenas com base nos documentos existentes em sua base de conhecimento. Se não houver contexto suficiente, uma mensagem de contingência será exibida.
+
+3. Como sei se a resposta está correta?
+As fontes onde o assitente procurou a resposta para sua pergunta serão exibidas logo abaixo. Você poderá verificar os trechos originais.
+
+4. Posso confiar 100% nas respostas?
+AS respostas são baseadas em documentos oficiais, mas sempre valide com os documentos originais e em caso de dúvida, com as áreas de negócio.
+
+5. Posso sugerir melhorias?
+Sim. Use a sessão de feedback ao final da página para enviar uma mensagem.
+
+
+## Atualizações e versões
+
+| Data       | Versão | Alteração                            |
+|------------|--------|--------------------------------------|
+| 2025-10-06 | 0.0.1  | Testes de usabilidade e documentação |
+
+---
+
+
+## Fluxo
+
+Usuário
+  │
+  ▼
+Interface (Chat/UI)
+  │  pergunta
+  ▼
+Servidor/API ── pré-processa ──► Retriever (Vector Store)
+  │                               │
+  │                               └──► top-k trechos (contexto)
+  │
+  └── monta prompt RAG (instruções + pergunta + contexto)
+           │
+           └──► LLM (gera resposta) 
+                     │                           
+             ┌───────┴────────┐                  
+             │ contexto ok?   │                 
+             └───────┬────────┘
+                     │Sim
+                     ▼
+             Resposta + fontes
+                     │
+                     ▼
+            Interface (exibe + feedback)
+                     │
+                     ▼
+            Logs & Métricas (latência, p95, tokens, fallback, feedback)
+
