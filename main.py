@@ -26,6 +26,8 @@ import re
 import json
 import time
 
+import numpy as np
+
 import random
 import logging
 from warnings import filterwarnings
@@ -43,6 +45,8 @@ from langchain.memory import ConversationBufferMemory
 from pinecone import Pinecone
 from langchain_pinecone.vectorstores import PineconeVectorStore
 from langchain.globals import set_debug, set_verbose
+from sentence_transformers import CrossEncoder
+
 
 # --- Ambiente e Logging ---
 load_dotenv(override=True)
@@ -53,17 +57,37 @@ set_debug(True)
 set_verbose(True)
 
 # --- Variáveis de Ambiente ---
-LOG_LEVEL            = os.getenv("LOG_LEVEL", "INFO").upper()
-OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-GENERATION_MODEL     = os.getenv("GENERATION_MODEL", "llama3.2:latest")
-EMBEDDING_MODEL      = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large:latest")
-PINECONE_API_KEY     = os.getenv("PINECONE_API_KEY_DSUNIBLU")
-PINECONE_INDEX_NAME  = os.getenv("PINECONE_INDEX") or os.getenv("PINECONE_INDEX_NAME")
-DEFAULT_NAMESPACE    = os.getenv("PINECONE_NAMESPACE", "default")
-RETRIEVAL_K          = int(os.getenv("RETRIEVAL_K", "2"))
-OPENAI_KEY           = os.getenv("OPENAI_API_KEY")
-MAX_HISTORY          = int(os.getenv("MAX_HISTORY", "10"))
-TTL_SETUP            = int(os.getenv("TTL_SETUP", "1200"))
+LOG_LEVEL             = os.getenv("LOG_LEVEL", "INFO").upper()
+OLLAMA_BASE_URL       = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+GENERATION_MODEL      = os.getenv("GENERATION_MODEL", "llama3.2:latest")
+EMBEDDING_MODEL       = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large:latest")
+PINECONE_API_KEY      = os.getenv("PINECONE_API_KEY_DSUNIBLU")
+PINECONE_INDEX_NAME   = os.getenv("PINECONE_INDEX") or os.getenv("PINECONE_INDEX_NAME")
+DEFAULT_NAMESPACE     = os.getenv("PINECONE_NAMESPACE", "default")
+RETRIEVAL_K           = int(os.getenv("RETRIEVAL_K", "2"))
+OPENAI_KEY            = os.getenv("OPENAI_API_KEY")
+
+RERANK_METHOD_DEFAULT = os.getenv("RERANK_METHOD_DEFAULT", "none").lower()
+RERANK_TOP_K_DEFAULT  = int(os.getenv("RERANK_TOP_K_DEFAULT", "0"))  # 0 or empty means “use top_k if not specified”
+CROSS_ENCODER_MODEL   = os.getenv("CROSS_ENCODER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+RERANK_BATCH_SIZE     = int(os.getenv("RERANK_BATCH_SIZE", "16"))
+
+MAX_HISTORY           = int(os.getenv("MAX_HISTORY", "10"))
+TTL_SETUP             = int(os.getenv("TTL_SETUP", "1200"))
+
+
+model_name = CROSS_ENCODER_MODEL
+
+CROSS_ENCODER_CACHE = None
+def get_cross_encoder(model_name):
+    global CROSS_ENCODER_CACHE
+    if CROSS_ENCODER_CACHE is None:
+        CROSS_ENCODER_CACHE = CrossEncoder(model_name)
+    return CROSS_ENCODER_CACHE
+
+cross_model = get_cross_encoder(model_name)
+
+
 
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -301,11 +325,92 @@ def generate_llm_variants(question: str, n: int = 4) -> List[str]:
         logger.warning("Erro ao gerar variações com OpenAI: %s", e)
         return _fallback_variants(question, n)
 
-def retrieve_union(queries: List[str], k: int, namespace: str) -> List[Document]:
+def rerank_by_embedding(query:str, docs:List[Document], embed_function, top_k:int) -> List[Document]:
+    """Re-rank documentos pelo método do cosseno da similaridade entre vetores que representa a query e os documentos. Mesmo usado na busca"""
+
+    if not docs:
+        return docs
+
+    query_vector = np.array(embed_function.embed_query(query), dtype=float)
+
+    doc_texts = [d.page_content or "" for d in docs]
+    doc_vector = embed_function.embed_documents(doc_texts)
+    doc_vector = [np.array(vec, dtype=float) for vec in doc_vector]
+
+    if np.linalg.norm(query_vector) != 0:
+        query_vector = query_vector / np.linalg.norm(query_vector)
+
+    docs_normalizados = []
+    for vec in doc_vector:
+        if np.linalg.norm(vec) != 0:
+            docs_normalizados.append(vec / np.linalg.norm(vec))
+        else:
+            docs_normalizados.append(vec)
+
+    scores = [float(np.dot(query_vector, doc_vec)) for doc_vec in docs_normalizados]
+    scored_docs = list(zip(scores, range(len(docs)), docs))
+    scored_docs.sort(key=lambda x: x[0], reverse=True)
+
+    top_scored = scored_docs[:top_k]
+
+    reranked_docs = []
+    for score, _, doc in top_scored:
+        doc.metadata['rerank_score'] = round(score, 6)
+        doc.metadata['rerank_method'] = "embedding"
+        reranked_docs.append(doc)
+    return reranked_docs
+
+
+def rerank_by_cross_encoder(
+        query:str,
+        docs:List[Document],
+        model_name:str,
+        embed_function, 
+        top_k:int,
+        batch_size:int
+) -> List[Document]:
+    """Re-rank documentos usando modelo CrossEncoder para par query-document"""
+
+    if not docs:
+        return docs
+    
+    try:
+        cross_model = get_cross_encoder(model_name)
+    except Exception as e:
+        return rerank_by_embedding(query, docs, embed_function, top_k)
+
+    sentences = [(query, d.page_content) for d in docs]
+    scores = cross_model.predict(sentences, batch_size=batch_size)
+
+    # Sort docs by score
+    scored_docs = list(zip(scores, range(len(docs)), docs))
+    scored_docs.sort(key=lambda x: x[0], reverse=True)
+    top_scored = scored_docs[:top_k]
+
+    # Attach score and method to metadata
+    reranked_docs = []
+    for score, _, doc in top_scored:
+        doc.metadata["rerank_score"] = float(score)
+        doc.metadata["rerank_method"] = "cross_encoder"
+        reranked_docs.append(doc)
+    
+    return reranked_docs
+
+def retrieve_union(
+        queries: List[str], 
+        k: int, 
+        namespace: str,
+        rerank_method: str = "None",
+        rerank_top_k: int = None
+        ) -> List[Document]:
+    """
+    Recuperação de documentos para multi-consulta, deduplicação e opcionalmente re-rank.
+    """
     retriever = vectorstore.as_retriever(
         search_type="similarity",
         search_kwargs={"k": k, "namespace": namespace},
     )
+
     collected: List[Document] = []
     seen = set()
     for q in queries:
@@ -319,7 +424,28 @@ def retrieve_union(queries: List[str], k: int, namespace: str) -> List[Document]
             if key not in seen:
                 seen.add(key)
                 collected.append(d)
-    return collected
+
+    # Re-rank docs para geração com mais relevância
+    rerank_method = (rerank_method or "none").lower()
+    if rerank_method == "none":
+        final_top_k = rerank_top_k if rerank_top_k else k
+        return collected[:final_top_k] if final_top_k and len(collected) > final_top_k else collected
+    elif rerank_method == "embedding":
+        reranked = rerank_by_embedding(queries[0] if queries else "", collected, embeddings, rerank_top_k)
+        logger.debug(f"Embedding re-rank: {len(collected)} coletados, retornou top {len(reranked)}.")
+        if reranked:
+            top_scores = [doc.metadata.get("rerank_score") for doc in reranked[:3]]
+            logger.debug(f"Top-3 Embedding scores: {top_scores}")
+        return reranked
+    elif rerank_method == "cross-encoder":
+        reranked = rerank_by_cross_encoder(queries[0] if queries else "", collected, CROSS_ENCODER_MODEL, embeddings, rerank_top_k, RERANK_BATCH_SIZE)
+        logger.debug(f"Cross-encoder re-rank: considered {len(collected)} coletados, retornou top {len(reranked)}.")
+        if reranked:
+            top_scores = [doc.metadata.get('rerank_score') for doc in reranked[:3]]
+            logger.debug(f"Top-3 cross-encoder scores: {top_scores}")
+        return reranked
+    else:
+        return collected[:rerank_top_k] if rerank_top_k else collected
 
 def serialize_sources(docs: List[Document], max_chars: int = 900) -> List[Dict[str, Any]]:
     out = []
@@ -373,22 +499,23 @@ app.url_map.strict_slashes = False
 
 @app.route("/health", methods=["GET"])
 def health():
-    print("OK")
+    
     return jsonify({"status": "ok"}), 200
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    print("Starting...")
     start_time = time.perf_counter()
     try:
         payload = request.get_json(force=True, silent=False) or {}
         question = (payload.get("question") or "").strip()
         session_id = request.headers.get("X-Session-Id", "")
+        rerank_method = (payload.get("rerank_method") or RERANK_METHOD_DEFAULT).strip().lower()
+        rerank_top_k = payload.get("rerank_top_k", None)
+        if rerank_top_k is None:
+            rerank_top_k = RERANK_TOP_K_DEFAULT
         
         raw_use_rag = payload.get("use_rag", payload.get("force_rag", True))
         use_rag = _to_bool(raw_use_rag, default=True)
-
-
 
         if not session_id:
             return jsonify({"error": "Faltando session id"}), 400
@@ -433,7 +560,13 @@ def chat():
         generate_question = random.choice(multi_query[1:]) if len(multi_query) > 1 else multi_query[0]
 
         # 2) Recupera contexto (união deduplicada)
-        context_docs: List[Document] = retrieve_union(multi_query, k=k, namespace=namespace)
+        context_docs: List[Document] = retrieve_union(
+            queries=multi_query, 
+            k=k, 
+            namespace=namespace, 
+            rerank_method=rerank_method,
+            rerank_top_k=rerank_top_k
+            )
         context_text = format_docs(context_docs)
 
         # 3) Gera resposta
@@ -454,6 +587,7 @@ def chat():
         latency = (time.perf_counter() - start_time) * 1000
         logger.info(f"Latência /chat = {latency:.2f} ms")
         
+
         return jsonify({
             "question_original": question,
             "question_used": generate_question,
