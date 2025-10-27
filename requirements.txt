@@ -1,61 +1,40 @@
-# # -------------------------------
-# # Core Web (Flask backend)
-# # -------------------------------
-# Flask>=3.0
-# flask-cors>=4.0
-# waitress>=3.0            # servidor WSGI simples e estável p/ prod
-# python-dotenv>=1.0
-# requests>=2.32
-
-# # -------------------------------
-# # AWS / S3
-# # -------------------------------
-# boto3>=1.34
-
-# # -------------------------------
-# # Pinecone (SDK moderno 5.x+)
-# # -------------------------------
-# pinecone>=5.0
-
-# # -------------------------------
-# # LangChain (série 0.3.x compatível)
-# # Obs: manter todos na mesma "major/minor" para evitar conflitos
-# # -------------------------------
-# langchain
-# langchain-core
-# langchain-community
-# langchain-text-splitters
-# langchain-ollama
-# langchain-pinecone            # plugin separado costuma ter versão 0.2.x
-
-# # -------------------------------
-# # Ollama (cliente opcional p/ scripts diretos na API do Ollama)
-# # -------------------------------
-# ollama>=0.3
-
-
-# Core
-langchain>=0.3.0
-langchain-core>=0.3.0
-pydantic>=2.9.2
-
-# Connectores usados
-langchain-pinecone>=0.1.1
-langchain-ollama>=0.1.0
-
-# Vetor e embeddings
-pinecone-client>=5.0.1
-numpy>=1.26.0
-
-# Flask backend
+# -------------------------------
+# Core Web (Flask backend)
+# -------------------------------
 flask>=3.0.3
 flask-cors>=4.0.1
-waitress>=3.0            # servidor WSGI simples e estável p/ prod
+waitress>=3.0           # servidor WSGI simples e estável p/ prod
 python-dotenv>=1.0.1
-
-# Utilidades
 requests>=2.32.3
 
+# -------------------------------
+# AWS / S3
+# -------------------------------
+boto3>=1.34
 
-# Redis
-redis==6.4.0
+# -------------------------------
+# Pinecone (SDK moderno 5.x+)
+# -------------------------------
+pinecone-client>=5.0.1
+
+# -------------------------------
+# LangChain e ecossistema (compatível com a série 0.3.x)
+# -------------------------------
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community
+langchain-text-splitters
+langchain-ollama>=0.1.0
+langchain-pinecone>=0.1.1
+
+# -------------------------------
+# Ollama (cliente opcional)
+# -------------------------------
+ollama>=0.3
+
+# -------------------------------
+# Modelos & Embeddings
+# -------------------------------
+sentence-transformers
+numpy>=1.26.0
+pydantic>=2.9.2
