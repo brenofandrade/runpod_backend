@@ -4,7 +4,7 @@
 #
 # Unimed Blumenau
 # 
-# Criado por Breno Andrado 
+# Criado por Breno Andrade
 #
 # Descrição: API que serve o LLM para interação de chat
 #
